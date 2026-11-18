@@ -24,24 +24,24 @@ begin
   end if;
 end $$;
 
-create or replace function public.my_role() returns text
+create or replace function public.menu_my_role() returns text
 language sql stable security definer set search_path = public as $$
   select role from public.profiles where id = auth.uid()
 $$;
 
-create or replace function public.is_editor() returns boolean
+create or replace function public.menu_is_editor() returns boolean
 language sql stable security definer set search_path = public as $$
   select coalesce((select role in ('owner','manager') from public.profiles where id = auth.uid()), false)
 $$;
 
-create or replace function public.is_owner() returns boolean
+create or replace function public.menu_is_owner() returns boolean
 language sql stable security definer set search_path = public as $$
   select coalesce((select role = 'owner' from public.profiles where id = auth.uid()), false)
 $$;
 
 -- The first account that signs up becomes the owner; later accounts start as staff
 -- (the owner can change roles from Admin > Team).
-create or replace function public.handle_new_user() returns trigger
+create or replace function public.menu_handle_new_user() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
   insert into public.profiles (id, email, role)
@@ -51,9 +51,9 @@ begin
   return new;
 end $$;
 
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created after insert on auth.users
-  for each row execute function public.handle_new_user();
+drop trigger if exists menu_on_auth_user_created on auth.users;
+create trigger menu_on_auth_user_created after insert on auth.users
+  for each row execute function public.menu_handle_new_user();
 
 -- ---------------------------------------------------------------- menu
 create table if not exists public.restaurant (
@@ -180,14 +180,14 @@ create table if not exists public.events (
 create index if not exists events_created_idx on public.events(created_at);
 
 -- updated_at triggers
-create or replace function public.touch_updated_at() returns trigger language plpgsql as $$
+create or replace function public.menu_touch_updated_at() returns trigger language plpgsql as $$
 begin new.updated_at = now(); return new; end $$;
 do $$
 declare t text;
 begin
   foreach t in array array['restaurant','categories','items','banners','specials','tables'] loop
-    execute format('drop trigger if exists touch_%1$s on public.%1$s', t);
-    execute format('create trigger touch_%1$s before update on public.%1$s for each row execute function public.touch_updated_at()', t);
+    execute format('drop trigger if exists menu_touch_%1$s on public.%1$s', t);
+    execute format('create trigger menu_touch_%1$s before update on public.%1$s for each row execute function public.menu_touch_updated_at()', t);
   end loop;
 end $$;
 
@@ -201,19 +201,19 @@ end $$;
 grant execute on function public.increment_scan(text) to anon, authenticated;
 
 -- Staff may only flip sold_out. Enforced in the database, not just the UI.
-create or replace function public.guard_staff_item_update() returns trigger
+create or replace function public.menu_guard_staff_item_update() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
-  if public.my_role() = 'staff' then
+  if public.menu_my_role() = 'staff' then
     if (to_jsonb(new) - 'sold_out' - 'updated_at') is distinct from (to_jsonb(old) - 'sold_out' - 'updated_at') then
       raise exception 'Staff can only change sold out';
     end if;
   end if;
   return new;
 end $$;
-drop trigger if exists guard_staff_items on public.items;
-create trigger guard_staff_items before update on public.items
-  for each row execute function public.guard_staff_item_update();
+drop trigger if exists menu_guard_staff_items on public.items;
+create trigger menu_guard_staff_items before update on public.items
+  for each row execute function public.menu_guard_staff_item_update();
 
 -- ---------------------------------------------------------------- row level security
 alter table public.profiles   enable row level security;
@@ -228,56 +228,56 @@ alter table public.events     enable row level security;
 
 -- Profiles: everyone signed in sees their own row; owner manages all.
 drop policy if exists profiles_self on public.profiles;
-create policy profiles_self on public.profiles for select to authenticated using (id = auth.uid() or public.is_owner());
+create policy profiles_self on public.profiles for select to authenticated using (id = auth.uid() or public.menu_is_owner());
 drop policy if exists profiles_owner on public.profiles;
-create policy profiles_owner on public.profiles for update to authenticated using (public.is_owner()) with check (public.is_owner());
+create policy profiles_owner on public.profiles for update to authenticated using (public.menu_is_owner()) with check (public.menu_is_owner());
 drop policy if exists profiles_owner_delete on public.profiles;
-create policy profiles_owner_delete on public.profiles for delete to authenticated using (public.is_owner() and id <> auth.uid());
+create policy profiles_owner_delete on public.profiles for delete to authenticated using (public.menu_is_owner() and id <> auth.uid());
 
 -- Restaurant: public read, owner write.
 drop policy if exists restaurant_read on public.restaurant;
 create policy restaurant_read on public.restaurant for select using (true);
 drop policy if exists restaurant_write on public.restaurant;
-create policy restaurant_write on public.restaurant for all to authenticated using (public.is_owner()) with check (public.is_owner());
+create policy restaurant_write on public.restaurant for all to authenticated using (public.menu_is_owner()) with check (public.menu_is_owner());
 
 -- Menu content: public reads visible rows; editors (owner, manager) read and write everything.
 drop policy if exists categories_read on public.categories;
-create policy categories_read on public.categories for select using (visible or public.is_editor() or public.my_role() = 'staff');
+create policy categories_read on public.categories for select using (visible or public.menu_is_editor() or public.menu_my_role() = 'staff');
 drop policy if exists categories_write on public.categories;
-create policy categories_write on public.categories for all to authenticated using (public.is_editor()) with check (public.is_editor());
+create policy categories_write on public.categories for all to authenticated using (public.menu_is_editor()) with check (public.menu_is_editor());
 
 drop policy if exists items_read on public.items;
-create policy items_read on public.items for select using (visible or public.my_role() is not null);
+create policy items_read on public.items for select using (visible or public.menu_my_role() is not null);
 drop policy if exists items_write on public.items;
-create policy items_write on public.items for all to authenticated using (public.is_editor()) with check (public.is_editor());
+create policy items_write on public.items for all to authenticated using (public.menu_is_editor()) with check (public.menu_is_editor());
 drop policy if exists items_staff_update on public.items;
-create policy items_staff_update on public.items for update to authenticated using (public.my_role() = 'staff') with check (public.my_role() = 'staff');
+create policy items_staff_update on public.items for update to authenticated using (public.menu_my_role() = 'staff') with check (public.menu_my_role() = 'staff');
 
 drop policy if exists banners_read on public.banners;
-create policy banners_read on public.banners for select using (active or public.is_editor());
+create policy banners_read on public.banners for select using (active or public.menu_is_editor());
 drop policy if exists banners_write on public.banners;
-create policy banners_write on public.banners for all to authenticated using (public.is_editor()) with check (public.is_editor());
+create policy banners_write on public.banners for all to authenticated using (public.menu_is_editor()) with check (public.menu_is_editor());
 
 drop policy if exists specials_read on public.specials;
-create policy specials_read on public.specials for select using (active or public.is_editor());
+create policy specials_read on public.specials for select using (active or public.menu_is_editor());
 drop policy if exists specials_write on public.specials;
-create policy specials_write on public.specials for all to authenticated using (public.is_editor()) with check (public.is_editor());
+create policy specials_write on public.specials for all to authenticated using (public.menu_is_editor()) with check (public.menu_is_editor());
 
 -- Rates: public read; owner sets manual overrides; the refresh job uses the secret key.
 drop policy if exists rates_read on public.rates;
 create policy rates_read on public.rates for select using (true);
 drop policy if exists rates_write on public.rates;
-create policy rates_write on public.rates for all to authenticated using (public.is_owner()) with check (public.is_owner());
+create policy rates_write on public.rates for all to authenticated using (public.menu_is_owner()) with check (public.menu_is_owner());
 
 -- Tables / QR: editors only (scan counter goes through increment_scan()).
 drop policy if exists tables_rw on public.tables;
-create policy tables_rw on public.tables for all to authenticated using (public.is_editor()) with check (public.is_editor());
+create policy tables_rw on public.tables for all to authenticated using (public.menu_is_editor()) with check (public.menu_is_editor());
 
 -- Events: anyone may insert; only editors read.
 drop policy if exists events_insert on public.events;
 create policy events_insert on public.events for insert to anon, authenticated with check (true);
 drop policy if exists events_read on public.events;
-create policy events_read on public.events for select to authenticated using (public.is_editor());
+create policy events_read on public.events for select to authenticated using (public.menu_is_editor());
 
 -- ---------------------------------------------------------------- storage (photos)
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
@@ -288,6 +288,6 @@ on conflict (id) do update set public = true, file_size_limit = 5242880,
 drop policy if exists menu_public_read on storage.objects;
 create policy menu_public_read on storage.objects for select using (bucket_id = 'menu');
 drop policy if exists menu_editor_write on storage.objects;
-create policy menu_editor_write on storage.objects for insert to authenticated with check (bucket_id = 'menu' and public.is_editor());
+create policy menu_editor_write on storage.objects for insert to authenticated with check (bucket_id = 'menu' and public.menu_is_editor());
 drop policy if exists menu_editor_delete on storage.objects;
-create policy menu_editor_delete on storage.objects for delete to authenticated using (bucket_id = 'menu' and public.is_editor());
+create policy menu_editor_delete on storage.objects for delete to authenticated using (bucket_id = 'menu' and public.menu_is_editor());
