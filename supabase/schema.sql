@@ -12,6 +12,18 @@ create table if not exists public.profiles (
   created_at timestamptz not null default now()
 );
 
+-- If the project already had a "profiles" table (many Supabase templates create one),
+-- add the columns this app needs instead of failing.
+alter table public.profiles add column if not exists email text;
+alter table public.profiles add column if not exists role text not null default 'staff';
+alter table public.profiles add column if not exists created_at timestamptz not null default now();
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conrelid = 'public.profiles'::regclass and conname = 'profiles_role_check') then
+    alter table public.profiles add constraint profiles_role_check check (role in ('owner','manager','staff'));
+  end if;
+end $$;
+
 create or replace function public.my_role() returns text
 language sql stable security definer set search_path = public as $$
   select role from public.profiles where id = auth.uid()
