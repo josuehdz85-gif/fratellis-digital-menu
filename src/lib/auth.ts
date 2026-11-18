@@ -59,10 +59,14 @@ export async function getSession(): Promise<Session | null> {
   const { data } = await sb.auth.getUser();
   if (!data.user) return null;
   const { data: profile } = await sb.from("profiles").select("role,email").eq("id", data.user.id).maybeSingle();
+  // Menu admin access is opt-in: a signed-in user without a menu role (e.g. a user of another
+  // app sharing this Supabase project) is treated as not signed in to the admin.
+  const role = profile?.role as Role | null | undefined;
+  if (role !== "owner" && role !== "manager" && role !== "staff") return null;
   return {
     userId: data.user.id,
     email: data.user.email ?? profile?.email ?? "",
-    role: (profile?.role as Role) ?? "staff",
+    role,
     mode: "supabase",
     mfaEnrolled: (data.user.factors ?? []).some((f) => f.status === "verified"),
   };

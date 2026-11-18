@@ -54,24 +54,70 @@ export async function signInAction(_: unknown, form: FormData): Promise<Result> 
     redirect("/admin");
   }
   const sb = await userClient();
-  const { error } = await sb.auth.signInWithPassword({ email, password });
-  if (error) return { ok: false, error: "Wrong email or password." };
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if (error || !data.user) return { ok: false, error: "Wrong email or password." };
+  const { data: profile } = await sb.from("profiles").select("role").eq("id", data.user.id).maybeSingle();
+  if (!profile?.role) {
+    await sb.auth.signOut();
+    return { ok: false, error: "This account doesn't have access to the menu admin. Ask the owner to invite you." };
+  }
   redirect("/admin");
 }
 
 /** First-run only: creates the owner account when nobody has signed up yet. */
+type Svc = NonNullable<ReturnType<typeof serviceClient>>;
+
+/** Gives a user a menu role (or removes it with null). Never touches other columns of profiles. */
+async function setMenuRole(svc: Svc, userId: string, email: string | undefined, role: Role | null) {
+  const { data: updated, error } = await svc.from("profiles").update({ role }).eq("id", userId).select("id");
+  if (error) throw new Error(error.message);
+  if (!updated?.length && role) {
+    const { error: insErr } = await svc.from("profiles").insert({ id: userId, email: email ?? null, role });
+    if (insErr) throw new Error(insErr.message);
+  }
+}
+
+async function findUserByEmail(svc: Svc, email: string) {
+  for (let page = 1; page < 50; page++) {
+    const { data, error } = await svc.auth.admin.listUsers({ page, perPage: 200 });
+    if (error) throw new Error(error.message);
+    const hit = data.users.find((u) => u.email?.toLowerCase() === email.toLowerCase());
+    if (hit) return hit;
+    if (data.users.length < 200) return null;
+  }
+  return null;
+}
+
+async function ownerExists(svc: Svc) {
+  const { count } = await svc.from("profiles").select("id", { count: "exact", head: true }).eq("role", "owner");
+  return Boolean(count);
+}
+
+/**
+ * First-run only: makes the menu owner. Works with a brand-new email, or with an account that
+ * already exists in this Supabase project (the correct password is required).
+ */
 export async function createOwnerAction(_: unknown, form: FormData): Promise<Result> {
   const svc = serviceClient();
   if (!svc) return { ok: false, error: "SUPABASE_SECRET_KEY is not configured." };
-  const { count } = await svc.from("profiles").select("id", { count: "exact", head: true });
-  if (count) return { ok: false, error: "An owner account already exists. Sign in instead." };
+  if (await ownerExists(svc)) return { ok: false, error: "The menu already has an owner. Sign in instead." };
   const email = String(form.get("email") ?? "").trim().toLowerCase();
   const password = String(form.get("password") ?? "");
   if (password.length < 10) return { ok: false, error: "Use a password of at least 10 characters." };
-  const { error } = await svc.auth.admin.createUser({ email, password, email_confirm: true });
-  if (error) return { ok: false, error: error.message };
   const sb = await userClient();
-  await sb.auth.signInWithPassword({ email, password });
+  const existing = await findUserByEmail(svc, email);
+  let userId: string;
+  if (existing) {
+    const { data, error } = await sb.auth.signInWithPassword({ email, password });
+    if (error || !data.user) return { ok: false, error: "That email already has an account here. Enter its current password to make it the menu owner." };
+    userId = data.user.id;
+  } else {
+    const { data, error } = await svc.auth.admin.createUser({ email, password, email_confirm: true });
+    if (error || !data.user) return { ok: false, error: error?.message ?? "Could not create the account." };
+    userId = data.user.id;
+    await sb.auth.signInWithPassword({ email, password });
+  }
+  await setMenuRole(svc, userId, email, "owner");
   redirect("/admin");
 }
 
@@ -79,8 +125,7 @@ export async function needsOwnerSetup(): Promise<boolean> {
   if (!USE_SUPABASE) return false;
   const svc = serviceClient();
   if (!svc) return false;
-  const { count } = await svc.from("profiles").select("id", { count: "exact", head: true });
-  return !count;
+  return !(await ownerExists(svc));
 }
 
 export async function forgotPasswordAction(_: unknown, form: FormData): Promise<Result> {
@@ -524,11 +569,18 @@ export async function inviteUserAction(email: string, role: Role): Promise<Resul
     await requireRole(OWNER);
     const svc = serviceClient();
     if (!svc) return { ok: false, error: "Team invites need SUPABASE_SECRET_KEY." };
-    const { data, error } = await svc.auth.admin.inviteUserByEmail(email.trim(), {
+    const clean = email.trim().toLowerCase();
+    const existing = await findUserByEmail(svc, clean);
+    if (existing) {
+      // Already has an account in this project (maybe from another app): just grant menu access.
+      await setMenuRole(svc, existing.id, clean, role);
+      return { ok: true, warning: `${clean} already had an account, so no email was sent. They can sign in with their existing password.` };
+    }
+    const { data, error } = await svc.auth.admin.inviteUserByEmail(clean, {
       redirectTo: `${SITE_URL}/admin/auth/callback?next=/admin/reset`,
     });
     if (error) return fail(error);
-    if (data.user) await svc.from("profiles").upsert({ id: data.user.id, email: data.user.email, role });
+    if (data.user) await setMenuRole(svc, data.user.id, clean, role);
     return { ok: true };
   } catch (e) {
     return fail(e);
@@ -553,8 +605,8 @@ export async function removeUserAction(userId: string): Promise<Result> {
     if (userId === me.userId) return { ok: false, error: "You can't remove yourself." };
     const svc = serviceClient();
     if (!svc) return { ok: false, error: "Needs SUPABASE_SECRET_KEY." };
-    const { error } = await svc.auth.admin.deleteUser(userId);
-    if (error) return fail(error);
+    // Only remove menu access; never delete the account (it may be used by another app).
+    await setMenuRole(svc, userId, undefined, null);
     return { ok: true };
   } catch (e) {
     return fail(e);

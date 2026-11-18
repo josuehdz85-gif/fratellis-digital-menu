@@ -56,7 +56,7 @@ export function TeamManager({ profiles, me, mode }: { profiles: Profile[]; me: s
               {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
             </select>
             {p.id !== me ? (
-              <button className="btn-danger" disabled={busy} onClick={async () => { if (confirm(`Remove ${p.email}? They will lose access.`)) { await run(() => removeUserAction(p.id), "Removed"); router.refresh(); } }}>Remove</button>
+              <button className="btn-danger" disabled={busy} onClick={async () => { if (confirm(`Remove ${p.email} from the menu admin? Their account itself is kept.`)) { await run(() => removeUserAction(p.id), "Removed"); router.refresh(); } }}>Remove</button>
             ) : null}
           </li>
         ))}

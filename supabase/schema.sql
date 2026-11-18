@@ -1,26 +1,36 @@
 -- Fratelli's Digital Menu — Supabase schema
 -- Run once in the Supabase SQL editor (or `supabase db push`), then run `npm run seed:supabase`.
--- One Supabase project per restaurant (single tenant).
+-- One Supabase project per restaurant is recommended; the script is also safe in a project shared
+-- with another app (all functions/triggers are prefixed menu_, and admin roles are opt-in).
 
 create extension if not exists pgcrypto;
 
 -- ---------------------------------------------------------------- roles
+-- Menu admin access lives in profiles.role. It is OPT-IN: a user with no role (for example a
+-- user of another app sharing this Supabase project) has no access to the menu admin.
+-- Roles are only ever set by the app (owner setup, Team page), never automatically on sign-up.
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
-  email text not null,
-  role text not null default 'staff' check (role in ('owner','manager','staff')),
+  email text,
+  role text check (role in ('owner','manager','staff')),
   created_at timestamptz not null default now()
 );
 
 -- If the project already had a "profiles" table (many Supabase templates create one),
 -- add the columns this app needs instead of failing.
 alter table public.profiles add column if not exists email text;
-alter table public.profiles add column if not exists role text not null default 'staff';
+alter table public.profiles add column if not exists role text;
 alter table public.profiles add column if not exists created_at timestamptz not null default now();
+alter table public.profiles alter column role drop not null;
+alter table public.profiles alter column role drop default;
 do $$
 begin
   if not exists (select 1 from pg_constraint where conrelid = 'public.profiles'::regclass and conname = 'profiles_role_check') then
     alter table public.profiles add constraint profiles_role_check check (role in ('owner','manager','staff'));
+  end if;
+  -- Before an owner exists, nobody should hold a menu role (undoes the old 'staff' default).
+  if not exists (select 1 from public.profiles where role = 'owner') then
+    update public.profiles set role = null where role is not null;
   end if;
 end $$;
 
@@ -39,21 +49,25 @@ language sql stable security definer set search_path = public as $$
   select coalesce((select role = 'owner' from public.profiles where id = auth.uid()), false)
 $$;
 
--- The first account that signs up becomes the owner; later accounts start as staff
--- (the owner can change roles from Admin > Team).
-create or replace function public.menu_handle_new_user() returns trigger
-language plpgsql security definer set search_path = public as $$
+-- Only the menu owner (or the server with the secret key / SQL editor) may set or change a menu role.
+-- This matters when another app lets users edit their own profiles row.
+create or replace function public.menu_guard_role() returns trigger
+language plpgsql set search_path = public as $$
 begin
-  insert into public.profiles (id, email, role)
-  values (new.id, new.email,
-    case when exists (select 1 from public.profiles where role = 'owner') then 'staff' else 'owner' end)
-  on conflict (id) do nothing;
+  if (tg_op = 'INSERT' and new.role is not null) or (tg_op = 'UPDATE' and new.role is distinct from old.role) then
+    if current_user in ('anon', 'authenticated') and not public.menu_is_owner() then
+      raise exception 'Only the menu owner can change menu admin roles';
+    end if;
+  end if;
   return new;
 end $$;
+drop trigger if exists menu_guard_role on public.profiles;
+create trigger menu_guard_role before insert or update on public.profiles
+  for each row execute function public.menu_guard_role();
 
+-- Earlier versions of this script added a sign-up trigger; it is no longer used.
 drop trigger if exists menu_on_auth_user_created on auth.users;
-create trigger menu_on_auth_user_created after insert on auth.users
-  for each row execute function public.menu_handle_new_user();
+drop function if exists public.menu_handle_new_user();
 
 -- ---------------------------------------------------------------- menu
 create table if not exists public.restaurant (
@@ -191,6 +205,16 @@ begin
   end loop;
 end $$;
 
+-- Remove triggers left by the first version of this script (menu tables only).
+do $
+declare t text;
+begin
+  foreach t in array array['restaurant','categories','items','banners','specials','tables'] loop
+    execute format('drop trigger if exists touch_%1$s on public.%1$s', t);
+  end loop;
+end $;
+drop trigger if exists guard_staff_items on public.items;
+
 -- QR scan counter callable by anyone (only increments).
 create or replace function public.increment_scan(p_code text) returns boolean
 language plpgsql security definer set search_path = public as $$
@@ -231,8 +255,8 @@ drop policy if exists profiles_self on public.profiles;
 create policy profiles_self on public.profiles for select to authenticated using (id = auth.uid() or public.menu_is_owner());
 drop policy if exists profiles_owner on public.profiles;
 create policy profiles_owner on public.profiles for update to authenticated using (public.menu_is_owner()) with check (public.menu_is_owner());
+-- Menu owners never delete profile rows (they may belong to another app); access is removed by clearing role.
 drop policy if exists profiles_owner_delete on public.profiles;
-create policy profiles_owner_delete on public.profiles for delete to authenticated using (public.menu_is_owner() and id <> auth.uid());
 
 -- Restaurant: public read, owner write.
 drop policy if exists restaurant_read on public.restaurant;
