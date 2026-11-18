@@ -1,0 +1,102 @@
+@import "tailwindcss";
+
+/* Fratelli's brand tokens (taken from the restaurant website). */
+@theme {
+  --color-pomodoro: #b8262b;
+  --color-pomodoro-deep: #8f1b20;
+  --color-basil: #2f6b2f;
+  --color-basil-light: #6ba33f;
+  --color-chianti: #3b1113;
+  --color-crust: #f3e3c8;
+  --color-cream: #fbf6ee;
+  --color-ink: #24160f;
+  --color-ink-soft: #5c4a40;
+  --color-line: #eadfd3;
+  --color-paper: #ffffff;
+  --color-focus: #1d5fd1;
+
+  --font-display: var(--font-bodoni), "Didot", "Bodoni 72", Georgia, serif;
+  --font-sans: var(--font-figtree), system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --radius-card: 1rem;
+  --shadow-card: 0 1px 2px rgb(36 22 15 / 0.06), 0 4px 14px rgb(36 22 15 / 0.06);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-padding-top: 8rem;
+    background: var(--color-cream);
+  }
+  body {
+    background: var(--color-cream);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+  h1, h2, h3 {
+    text-wrap: balance;
+  }
+  :focus-visible {
+    outline: 3px solid var(--color-focus);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility select-arrow {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235c4a40'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.6rem center;
+}
+
+@utility tap {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+@utility gingham {
+  background-color: #fff;
+  background-image:
+    linear-gradient(90deg, rgb(184 38 43 / 0.12) 50%, transparent 50%),
+    linear-gradient(rgb(184 38 43 / 0.12) 50%, transparent 50%);
+  background-size: 22px 22px;
+}
+
+/* Admin form controls */
+@utility field {
+  @apply block w-full rounded-lg border border-line bg-white px-3 py-2.5 text-base text-ink placeholder:text-ink-soft/60 focus:border-pomodoro focus:outline-none focus:ring-2 focus:ring-pomodoro/20;
+}
+@utility label {
+  @apply mb-1 block text-sm font-semibold text-ink;
+}
+@utility btn {
+  @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50;
+}
+@utility btn-primary {
+  @apply btn bg-pomodoro text-white hover:bg-pomodoro-deep;
+}
+@utility btn-ghost {
+  @apply btn border border-line bg-white text-ink hover:bg-cream;
+}
+@utility btn-danger {
+  @apply btn border border-red-200 bg-white text-red-700 hover:bg-red-50;
+}
+@utility card {
+  @apply rounded-card border border-line bg-white shadow-card;
+}

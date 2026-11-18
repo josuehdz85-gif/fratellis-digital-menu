@@ -1,0 +1,9 @@
+node_modules
+.next
+.env*.local
+.env
+data/local-db.json
+public/uploads
+*.tsbuildinfo
+next-env.d.ts
+.vercel
